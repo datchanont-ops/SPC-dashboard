@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import io
+import os # นำเข้าไลบรารีสำหรับตรวจสอบไฟล์
 
 # 1. ตั้งค่าหน้ากระดาษเป็น Wide Mode พร้อมชื่อเพจใหม่
 st.set_page_config(page_title="SPC Production Shortage Dashboard", layout="wide")
@@ -68,7 +69,6 @@ def to_excel(df):
 def process_data(uploaded_file, file_template, include_plan=True):
     xls = pd.ExcelFile(uploaded_file)
     
-    # ค้นหา Sheet แบบยืดหยุ่น
     def get_sheet(sheet_names, target):
         for s in sheet_names:
             if target.lower() in s.strip().lower(): 
@@ -108,7 +108,6 @@ def process_data(uploaded_file, file_template, include_plan=True):
     df_ord[sap_col_ord] = df_ord[sap_col_ord].astype(str).str.strip()
     df_wip[mat_col_wip] = df_wip[mat_col_wip].astype(str).str.strip()
 
-    # โหลดไฟล์ Master Template
     try:
         df_sum_raw = pd.read_excel(file_template, sheet_name='summary v1', header=1)
         df_sum_raw_headerless = pd.read_excel(file_template, sheet_name='summary v1', header=None)
@@ -225,137 +224,156 @@ target_file = "14-8.xlsx"
 with col_upload:
     st.markdown('<div class="filter-title">📂 อัปโหลดไฟล์ Database</div>', unsafe_allow_html=True)
     uploaded_file = st.file_uploader("", type=["xlsx"], label_visibility="collapsed")
-    if uploaded_file is not None: target_file = uploaded_file
+    if uploaded_file is not None: 
+        target_file = uploaded_file
+
+# ตรวจสอบว่าบนเซิร์ฟเวอร์มีไฟล์ 14-8.xlsx ให้โหลดตอนแรกไหม ถ้าไม่มีก็ไม่เป็นไร ให้รอ User อัปโหลด
+if isinstance(target_file, str) and not os.path.exists(target_file):
+    target_file = None
 
 with col_plan_toggle:
     st.markdown('<div class="filter-title">⚙️ โหมดคำนวณ</div>', unsafe_allow_html=True)
     include_plan = st.checkbox("รวมแผนผลิต (Plan)", value=True)
 
-try:
-    with st.spinner("กำลังประมวลผลข้อมูล..."):
-        df_result, available_dates, df_missing = process_data(target_file, template_path, include_plan=include_plan)
-    
-    with col_filter:
-        st.markdown('<div class="filter-title">📅 ดู Balance ถึงวันที่</div>', unsafe_allow_html=True)
-        min_d = min(available_dates)
-        max_d = max(available_dates)
-        
-        # ขยายวันที่ในปฏิทินให้กดเลือกล่วงหน้าเพิ่มได้อีก 2 เดือน (60 วัน)
-        max_selectable_date = (pd.to_datetime(max_d) + pd.DateOffset(months=2)).date()
-        
-        selected_date = st.date_input("", value=max_d, min_value=min_d, max_value=max_selectable_date, format="DD/MM/YYYY", label_visibility="collapsed")
-        selected_date_str = selected_date.strftime('%Y-%m-%d')
-    
-    df_result['Short Date DT'] = pd.to_datetime(df_result['Short Date'], errors='coerce')
-    mask_short = df_result['Short Date'] != 'OK'
-    mask_date = df_result['Short Date DT'].dt.date <= selected_date
-    
-    shortage_df = df_result[mask_short & mask_date].copy()
-    
-    total_short = len(shortage_df)
-    total_orders_sum = shortage_df['Orders'].sum()
-    
-    mode_plan_text = " (รวมแผนผลิต)" if include_plan else " (ไม่รวมแผนผลิต)"
-    
-    # 1. เปลี่ยนชื่อหัวข้อเป็น SPC Production Shortage Dashboard
+# -------------------------------------------------------------
+# จุดแก้ปัญหาเว็บล่ม: ถ้าระบบหาไฟล์ไม่เจอ ให้โชว์คำเตือนแทนการแสดง Error
+# -------------------------------------------------------------
+if target_file is None:
     with col_header:
         st.markdown(f"""
             <div class="custom-header">
                 <h2 style="margin:0; color:#0f172a; font-size: 28px; display:flex; align-items:center;">
                     📈 SPC Production Shortage Dashboard
                 </h2>
-                <p style="margin:6px 0 0 0; color:#64748b; font-size: 15px;">แสดงผลข้อมูลและสถานะการ Short{mode_plan_text}</p>
+                <p style="margin:6px 0 0 0; color:#64748b; font-size: 15px;">ระบบรันสำเร็จ! พร้อมใช้งานแล้ว</p>
+            </div>
+        """, unsafe_allow_html=True)
+    st.info("👋 ยินดีต้อนรับ! ระบบไม่พบไฟล์ข้อมูลตั้งต้นบนเซิร์ฟเวอร์ **กรุณาอัปโหลดไฟล์ Database ประจำวัน (เช่น 14-8.xlsx)** ที่ช่องมุมขวาบน เพื่อเริ่มต้นการแสดงผลครับ")
+    st.warning("💡 หมายเหตุ: หากอัปโหลดไฟล์แล้วยัง Error กรุณาตรวจสอบให้แน่ใจว่าใน GitHub ของคุณได้ทำการอัปโหลดไฟล์ `Copy of daily check spc Aug26 rev2.2-1 .xlsx` (Master Template) เข้าไปเก็บไว้ใน Repository แล้ว")
+else:
+    try:
+        with st.spinner("กำลังประมวลผลข้อมูล..."):
+            df_result, available_dates, df_missing = process_data(target_file, template_path, include_plan=include_plan)
+        
+        with col_filter:
+            st.markdown('<div class="filter-title">📅 ดู Balance ถึงวันที่</div>', unsafe_allow_html=True)
+            min_d = min(available_dates)
+            max_d = max(available_dates)
+            
+            # ขยายวันที่ในปฏิทินให้กดเลือกล่วงหน้าเพิ่มได้อีก 2 เดือน
+            max_selectable_date = (pd.to_datetime(max_d) + pd.DateOffset(months=2)).date()
+            
+            selected_date = st.date_input("", value=max_d, min_value=min_d, max_value=max_selectable_date, format="DD/MM/YYYY", label_visibility="collapsed")
+            selected_date_str = selected_date.strftime('%Y-%m-%d')
+        
+        df_result['Short Date DT'] = pd.to_datetime(df_result['Short Date'], errors='coerce')
+        mask_short = df_result['Short Date'] != 'OK'
+        mask_date = df_result['Short Date DT'].dt.date <= selected_date
+        
+        shortage_df = df_result[mask_short & mask_date].copy()
+        
+        total_short = len(shortage_df)
+        total_orders_sum = shortage_df['Orders'].sum()
+        
+        mode_plan_text = " (รวมแผนผลิต)" if include_plan else " (ไม่รวมแผนผลิต)"
+        
+        with col_header:
+            st.markdown(f"""
+                <div class="custom-header">
+                    <h2 style="margin:0; color:#0f172a; font-size: 28px; display:flex; align-items:center;">
+                        📈 SPC Production Shortage Dashboard
+                    </h2>
+                    <p style="margin:6px 0 0 0; color:#64748b; font-size: 15px;">แสดงผลข้อมูลและสถานะการ Short{mode_plan_text}</p>
+                </div>
+            """, unsafe_allow_html=True)
+
+        if not df_missing.empty:
+            st.error(f"⚠️ **แจ้งเตือนความเสี่ยงหลุด Balance:** พบ {len(df_missing)} Part ที่มีรายการออเดอร์ (ord bac) แต่ไม่ได้ถูกบันทึกโครงสร้างไว้ใน Master (summary v1)")
+            with st.expander("คลิกเพื่อดูรายการ Part ที่ตกหล่น", expanded=False):
+                st.dataframe(df_missing.style.map(lambda _: 'color: #b91c1c; font-weight: bold;', subset=['Missing Part (from Ord)']), hide_index=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+
+        mode_status = "✨ ข้อมูลอัปเดตล่าสุด<br>(Live File)" if uploaded_file is not None else "🕒 ข้อมูลเดิม<br>(Master File)"
+
+        # 5. การ์ด KPI 
+        st.markdown(f"""
+            <div class="kpi-row">
+                <div class="kpi-card b-red">
+                    <div class="kpi-label">Part ที่สถานะ Short (จนถึง {selected_date.strftime('%d/%m/%Y')})</div>
+                    <div class="kpi-val">{total_short:,}</div>
+                </div>
+                <div class="kpi-card b-yellow">
+                    <div class="kpi-label">จำนวน Order ค้างส่ง (ชิ้น)</div>
+                    <div class="kpi-val">{total_orders_sum:,}</div>
+                </div>
+                <div class="kpi-card b-green">
+                    <div class="kpi-label">สถานะระบบ</div>
+                    <div class="kpi-val-text">{mode_status}</div>
+                </div>
             </div>
         """, unsafe_allow_html=True)
 
-    if not df_missing.empty:
-        st.error(f"⚠️ **แจ้งเตือนความเสี่ยงหลุด Balance:** พบ {len(df_missing)} Part ที่มีรายการออเดอร์ (ord bac) แต่ไม่ได้ถูกบันทึกโครงสร้างไว้ใน Master (summary v1)")
-        with st.expander("คลิกเพื่อดูรายการ Part ที่ตกหล่น", expanded=False):
-            st.dataframe(df_missing.style.map(lambda _: 'color: #b91c1c; font-weight: bold;', subset=['Missing Part (from Ord)']), hide_index=True)
-        st.markdown("<br>", unsafe_allow_html=True)
+        # 6. แบ่งหน้าจอ
+        left_col, right_col = st.columns([1.2, 2.8])
 
-    mode_status = "✨ ข้อมูลอัปเดตล่าสุด<br>(Live File)" if uploaded_file is not None else "🕒 ข้อมูลเดิม<br>(Master File)"
+        with left_col:
+            st.markdown("<h3 style='color:#1e293b; font-weight:600; font-size: 18px; margin-bottom:15px;'>แยกตามแผนก (SCHE)</h3>", unsafe_allow_html=True)
+            if total_short > 0:
+                sche_counts = shortage_df['SCHE'].value_counts().reset_index()
+                sche_counts.columns = ['SCHE', 'Count']
+                custom_colors = ['#ef4444', '#f97316', '#f59e0b', '#84cc16', '#10b981', '#06b6d4', '#3b82f6', '#6366f1', '#8b5cf6', '#ec4899']
+                fig = px.pie(sche_counts, values='Count', names='SCHE', hole=0.55, color_discrete_sequence=custom_colors)
+                fig.update_traces(textinfo='none', hoverinfo='label+percent')
+                fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=450, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.0, font=dict(size=14)))
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.success("ไม่มี Part ที่ติด Short")
 
-    # 5. การ์ด KPI 
-    st.markdown(f"""
-        <div class="kpi-row">
-            <div class="kpi-card b-red">
-                <div class="kpi-label">Part ที่สถานะ Short (จนถึง {selected_date.strftime('%d/%m/%Y')})</div>
-                <div class="kpi-val">{total_short:,}</div>
-            </div>
-            <div class="kpi-card b-yellow">
-                <div class="kpi-label">จำนวน Order ค้างส่ง (ชิ้น)</div>
-                <div class="kpi-val">{total_orders_sum:,}</div>
-            </div>
-            <div class="kpi-card b-green">
-                <div class="kpi-label">สถานะระบบ</div>
-                <div class="kpi-val-text">{mode_status}</div>
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
-
-    # 6. แบ่งหน้าจอ
-    left_col, right_col = st.columns([1.2, 2.8])
-
-    with left_col:
-        st.markdown("<h3 style='color:#1e293b; font-weight:600; font-size: 18px; margin-bottom:15px;'>แยกตามแผนก (SCHE)</h3>", unsafe_allow_html=True)
-        if total_short > 0:
-            sche_counts = shortage_df['SCHE'].value_counts().reset_index()
-            sche_counts.columns = ['SCHE', 'Count']
-            custom_colors = ['#ef4444', '#f97316', '#f59e0b', '#84cc16', '#10b981', '#06b6d4', '#3b82f6', '#6366f1', '#8b5cf6', '#ec4899']
-            fig = px.pie(sche_counts, values='Count', names='SCHE', hole=0.55, color_discrete_sequence=custom_colors)
-            fig.update_traces(textinfo='none', hoverinfo='label+percent')
-            fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=450, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.0, font=dict(size=14)))
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.success("ไม่มี Part ที่ติด Short")
-
-    with right_col:
-        col_title, col_export = st.columns([3, 1])
-        with col_title:
-            st.markdown(f"<h3 style='color:#1e293b; font-weight:600; font-size: 18px; margin-bottom:15px;'>รายการ Part ที่ติดลบ {mode_plan_text}</h3>", unsafe_allow_html=True)
-        
-        if total_short > 0:
-            # กำหนดคอลัมน์ที่จะแสดงในตาราง (หากเลือกล่วงหน้าเกินคอลัมน์ที่มี ให้ดึงคอลัมน์วันสุดท้ายที่มีมาแสดงแทน)
-            date_col_to_show = selected_date_str if selected_date_str in shortage_df.columns else max(available_dates).strftime('%Y-%m-%d')
+        with right_col:
+            col_title, col_export = st.columns([3, 1])
+            with col_title:
+                st.markdown(f"<h3 style='color:#1e293b; font-weight:600; font-size: 18px; margin-bottom:15px;'>รายการ Part ที่ติดลบ {mode_plan_text}</h3>", unsafe_allow_html=True)
             
-            display_df = shortage_df[['SCHE', 'Part No.', 'FG1', 'WIP+FG', 'Orders', date_col_to_show, 'Short Date', 'Note']].copy()
-            col_bal_name = f'Balance ณ {selected_date.strftime("%d/%m/%Y")}'
-            display_df.rename(columns={date_col_to_show: col_bal_name}, inplace=True)
-            
-            display_df['Short Date'] = pd.to_datetime(display_df['Short Date'], errors='coerce').dt.strftime('%d/%m/%Y').fillna('OK')
-            
-            with col_export:
-                excel_data = to_excel(display_df)
-                st.download_button(label="📥 Download Excel", data=excel_data, file_name=f"Shortage_Report_{selected_date.strftime('%d_%m_%Y')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            
-            dynamic_height = int((len(display_df) + 1) * 36) + 40
-            
-            st.dataframe(
-                display_df.style.map(
-                    lambda x: 'color: #b91c1c; background-color: #fee2e2; font-weight: 600; text-align: center; font-size: 14px;' if x != 'OK' else '', 
-                    subset=['Short Date']
-                ).map(
-                    lambda x: 'color: #ef4444; font-weight: 500; font-size: 14px;' if isinstance(x, (int, float)) and x > 0 else 'font-size: 14px;',
-                    subset=['Orders']
-                ).map(
-                    lambda x: 'color: #2563eb; font-weight: 600; font-size: 14px;',
-                    subset=['Part No.', 'FG1']
-                ).map(
-                    lambda x: 'color: #b91c1c; font-weight: 700; font-size: 14px;' if isinstance(x, (int, float)) and x < 0 else 'color: #10b981; font-weight: 600; font-size: 14px;',
-                    subset=[col_bal_name]
-                ).map(
-                    lambda x: 'color: #64748b; font-size: 13px;',
-                    subset=['Note']
-                ),
-                use_container_width=True,
-                height=dynamic_height,
-                hide_index=True
-            )
-        else:
-            st.info("ไม่พบรายการ Part ที่ติดลบ")
+            if total_short > 0:
+                date_col_to_show = selected_date_str if selected_date_str in shortage_df.columns else max(available_dates).strftime('%Y-%m-%d')
+                
+                display_df = shortage_df[['SCHE', 'Part No.', 'FG1', 'WIP+FG', 'Orders', date_col_to_show, 'Short Date', 'Note']].copy()
+                col_bal_name = f'Balance ณ {selected_date.strftime("%d/%m/%Y")}'
+                display_df.rename(columns={date_col_to_show: col_bal_name}, inplace=True)
+                
+                display_df['Short Date'] = pd.to_datetime(display_df['Short Date'], errors='coerce').dt.strftime('%d/%m/%Y').fillna('OK')
+                
+                with col_export:
+                    excel_data = to_excel(display_df)
+                    st.download_button(label="📥 Download Excel", data=excel_data, file_name=f"Shortage_Report_{selected_date.strftime('%d_%m_%Y')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                
+                dynamic_height = int((len(display_df) + 1) * 36) + 40
+                
+                st.dataframe(
+                    display_df.style.map(
+                        lambda x: 'color: #b91c1c; background-color: #fee2e2; font-weight: 600; text-align: center; font-size: 14px;' if x != 'OK' else '', 
+                        subset=['Short Date']
+                    ).map(
+                        lambda x: 'color: #ef4444; font-weight: 500; font-size: 14px;' if isinstance(x, (int, float)) and x > 0 else 'font-size: 14px;',
+                        subset=['Orders']
+                    ).map(
+                        lambda x: 'color: #2563eb; font-weight: 600; font-size: 14px;',
+                        subset=['Part No.', 'FG1']
+                    ).map(
+                        lambda x: 'color: #b91c1c; font-weight: 700; font-size: 14px;' if isinstance(x, (int, float)) and x < 0 else 'color: #10b981; font-weight: 600; font-size: 14px;',
+                        subset=[col_bal_name]
+                    ).map(
+                        lambda x: 'color: #64748b; font-size: 13px;',
+                        subset=['Note']
+                    ),
+                    use_container_width=True,
+                    height=dynamic_height,
+                    hide_index=True
+                )
+            else:
+                st.info("ไม่พบรายการ Part ที่ติดลบ")
 
-except Exception as e:
-    st.error(f"🚨 ระบบตรวจพบข้อผิดพลาด: {e}")
-    st.warning("คำแนะนำ: โปรดตรวจสอบให้แน่ใจว่าไฟล์ที่อัปโหลด หรือไฟล์ Master Template มีข้อมูลถูกต้องและไม่ได้ถูกลบ/เปลี่ยนชื่อ Sheet ไปจากเดิม")
-    st.exception(e)
+    except Exception as e:
+        st.error(f"🚨 ระบบตรวจพบข้อผิดพลาด: {e}")
+        st.warning("คำแนะนำ: โปรดตรวจสอบให้แน่ใจว่าคุณได้นำไฟล์ Master Template (Copy of daily check...) อัปโหลดเข้า GitHub ไว้ในโฟลเดอร์เดียวกับโค้ดแล้ว หรือตรวจสอบว่าไฟล์ที่อัปโหลดมี Sheet ครบถ้วน")
+        st.exception(e)
