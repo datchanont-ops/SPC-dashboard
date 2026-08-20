@@ -106,7 +106,9 @@ def process_data(uploaded_file, file_template, include_plan=True):
 
     df_plan[part_col_plan] = df_plan[part_col_plan].astype(str).str.strip()
     df_ord[sap_col_ord] = df_ord[sap_col_ord].astype(str).str.strip()
-    df_wip[mat_col_wip] = df_wip[mat_col_wip].astype(str).str.strip()
+    
+    # 🌟 เพิ่มการทำความสะอาดชื่อ Part ใน sheet wip fg ตัด ;S1 และ ;S2 ออก
+    df_wip[mat_col_wip] = df_wip[mat_col_wip].astype(str).str.strip().str.replace(';S1', '', regex=False).str.replace(';S2', '', regex=False)
 
     try:
         df_sum_raw = pd.read_excel(file_template, sheet_name='summary v1', header=1)
