@@ -107,7 +107,7 @@ def process_data(uploaded_file, file_template, include_plan=True):
     df_plan[part_col_plan] = df_plan[part_col_plan].astype(str).str.strip()
     df_ord[sap_col_ord] = df_ord[sap_col_ord].astype(str).str.strip()
     
-    # 🌟 เพิ่มการทำความสะอาดชื่อ Part ใน sheet wip fg ตัด ;S1 และ ;S2 ออก
+    # ทำความสะอาดชื่อ Part ใน sheet wip fg ตัด ;S1 และ ;S2 ออก
     df_wip[mat_col_wip] = df_wip[mat_col_wip].astype(str).str.strip().str.replace(';S1', '', regex=False).str.replace(';S2', '', regex=False)
 
     try:
@@ -217,21 +217,34 @@ def process_data(uploaded_file, file_template, include_plan=True):
     return pd.DataFrame(dashboard_data), [d.date() for d in dates_row[1:32]], df_missing
 
 template_path = "Copy of daily check spc Aug26 rev2.2-1 .xlsx"
+saved_up_file = "saved_database.xlsx" # ชื่อไฟล์สำหรับจัดเก็บอัตโนมัติ
 
 # 4. แบ่งเลย์เอาต์
 col_header, col_filter, col_plan_toggle, col_upload = st.columns([1.6, 0.9, 0.9, 1.0])
 
-target_file = "14-8.xlsx" 
+target_file = None
 
 with col_upload:
     st.markdown('<div class="filter-title">📂 อัปโหลดไฟล์ Database</div>', unsafe_allow_html=True)
     uploaded_file = st.file_uploader("", type=["xlsx"], label_visibility="collapsed")
-    if uploaded_file is not None: 
+    
+    # 📌 ระบบจำไฟล์ข้อมูล (ไม่ต้องอัปโหลดซ้ำ)
+    if uploaded_file is not None:
         target_file = uploaded_file
-
-# ตรวจสอบว่าบนเซิร์ฟเวอร์มีไฟล์ 14-8.xlsx ให้โหลดตอนแรกไหม ถ้าไม่มีก็ไม่เป็นไร ให้รอ User อัปโหลด
-if isinstance(target_file, str) and not os.path.exists(target_file):
-    target_file = None
+        if st.button("💾 บันทึกไฟล์ข้อมูลนี้ไว้ใช้รอบหน้า", use_container_width=True):
+            with open(saved_up_file, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+            st.success("✅ บันทึกไฟล์เรียบร้อย! คราวหน้าไม่ต้องอัปโหลดใหม่")
+        st.caption("🟢 กำลังแสดงผลจาก: **ไฟล์ที่เพิ่งอัปโหลด**")
+    elif os.path.exists(saved_up_file):
+        target_file = saved_up_file
+        st.caption("📌 กำลังแสดงผลจาก: **ไฟล์ที่บันทึกไว้ล่าสุด**")
+        if st.button("🗑️ ล้างข้อมูลไฟล์ที่บันทึกไว้", use_container_width=True):
+            os.remove(saved_up_file)
+            st.rerun()
+    elif os.path.exists("14-8.xlsx"):
+        target_file = "14-8.xlsx"
+        st.caption("🕒 กำลังแสดงผลจาก: **ข้อมูลเริ่มต้น (14-8.xlsx)**")
 
 with col_plan_toggle:
     st.markdown('<div class="filter-title">⚙️ โหมดคำนวณ</div>', unsafe_allow_html=True)
