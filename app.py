@@ -3,10 +3,64 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import io
-import os # นำเข้าไลบรารีสำหรับตรวจสอบไฟล์
+import os
+import base64
+import requests
 
 # 1. ตั้งค่าหน้ากระดาษเป็น Wide Mode พร้อมชื่อเพจใหม่
 st.set_page_config(page_title="SPC Production Shortage Dashboard", layout="wide")
+
+# ==========================================
+# 🔗 ระบบจำไฟล์ถาวรผ่าน GitHub (Persistence Layer)
+# ==========================================
+try:
+    GITHUB_TOKEN = st.secrets["GITHUB_TOKEN"]
+    GITHUB_REPO = st.secrets["GITHUB_REPO"]
+    GITHUB_BRANCH = st.secrets.get("GITHUB_BRANCH", "main")
+    GITHUB_DATA_DIR = st.secrets.get("GITHUB_DATA_DIR", "data")
+    GITHUB_ENABLED = True
+except Exception:
+    GITHUB_ENABLED = False
+
+GITHUB_API = "https://api.github.com"
+
+def gh_headers():
+    return {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+
+def gh_get_file(remote_path):
+    if not GITHUB_ENABLED:
+        return None, None
+    url = f"{GITHUB_API}/repos/{GITHUB_REPO}/contents/{remote_path}?ref={GITHUB_BRANCH}"
+    try:
+        r = requests.get(url, headers=gh_headers(), timeout=15)
+        if r.status_code == 200:
+            data = r.json()
+            content = base64.b64decode(data["content"])
+            return content, data["sha"]
+    except Exception:
+        pass
+    return None, None
+
+def gh_put_file(remote_path, content_bytes, message):
+    if not GITHUB_ENABLED:
+        return False
+    _, sha = gh_get_file(remote_path)
+    url = f"{GITHUB_API}/repos/{GITHUB_REPO}/contents/{remote_path}"
+    payload = {
+        "message": message,
+        "content": base64.b64encode(content_bytes).decode("utf-8"),
+        "branch": GITHUB_BRANCH,
+    }
+    if sha:
+        payload["sha"] = sha
+    try:
+        r = requests.put(url, headers=gh_headers(), json=payload, timeout=15)
+        return r.status_code in (200, 201)
+    except Exception:
+        return False
 
 # 2. CSS ขั้นสูง
 st.markdown("""
@@ -217,9 +271,23 @@ def process_data(uploaded_file, file_template, include_plan=True):
     return pd.DataFrame(dashboard_data), [d.date() for d in dates_row[1:32]], df_missing
 
 template_path = "Copy of daily check spc Aug26 rev2.2-1 .xlsx"
-saved_up_file = "saved_database.xlsx" # ชื่อไฟล์สำหรับจัดเก็บอัตโนมัติ
+saved_up_file = "saved_database.xlsx"
 
-# 4. แบ่งเลย์เอาต์
+# -------------------------------------------------------------
+# 🔄 4. ระบบซิงค์ข้อมูลจาก GitHub ลง Local (ทำครั้งเดียวต่อ Session)
+# -------------------------------------------------------------
+if GITHUB_ENABLED and not st.session_state.get("github_synced"):
+    with st.spinner("🔄 กำลังซิงค์ไฟล์ข้อมูลล่าสุดจาก GitHub..."):
+        content, _ = gh_get_file(f"{GITHUB_DATA_DIR}/{saved_up_file}")
+        if content:
+            with open(saved_up_file, "wb") as f:
+                f.write(content)
+    st.session_state["github_synced"] = True
+elif not GITHUB_ENABLED:
+    # หากยังไม่ได้เชื่อมต่อ GitHub ระบบจะแจ้งเตือนเบาๆ แต่ยังทำงานแบบ Local ได้
+    pass
+
+# แบ่งเลย์เอาต์
 col_header, col_filter, col_plan_toggle, col_upload = st.columns([1.6, 0.9, 0.9, 1.0])
 
 target_file = None
@@ -228,30 +296,42 @@ with col_upload:
     st.markdown('<div class="filter-title">📂 อัปโหลดไฟล์ Database</div>', unsafe_allow_html=True)
     uploaded_file = st.file_uploader("", type=["xlsx"], label_visibility="collapsed")
     
-    # 📌 ระบบจำไฟล์ข้อมูล (ไม่ต้องอัปโหลดซ้ำ)
-    if uploaded_file is not None:
+    # 📌 ระบบจำไฟล์ข้อมูลลง GitHub / Local
+    if uploaded_file is not None: 
         target_file = uploaded_file
         if st.button("💾 บันทึกไฟล์ข้อมูลนี้ไว้ใช้รอบหน้า", use_container_width=True):
+            file_bytes = bytes(uploaded_file.getbuffer())
+            
+            # 1. บันทึกลงเครื่องเซิร์ฟเวอร์ชั่วคราว
             with open(saved_up_file, "wb") as f:
-                f.write(uploaded_file.getbuffer())
-            st.success("✅ บันทึกไฟล์เรียบร้อย! คราวหน้าไม่ต้องอัปโหลดใหม่")
+                f.write(file_bytes)
+                
+            # 2. ส่งขึ้น GitHub เพื่อจำแบบถาวร
+            if GITHUB_ENABLED:
+                with st.spinner("☁️ กำลังบันทึกไฟล์ขึ้น GitHub..."):
+                    ok = gh_put_file(f"{GITHUB_DATA_DIR}/{saved_up_file}", file_bytes, f"Auto-save db upload: {uploaded_file.name}")
+                if ok:
+                    st.success("✅ บันทึกไฟล์ขึ้น GitHub เรียบร้อย! คราวหน้าไม่ต้องอัปโหลดซ้ำแล้วครับ")
+                else:
+                    st.warning("⚠️ บันทึกลงระบบชั่วคราวได้ แต่ push ไป GitHub ไม่สำเร็จ")
+            else:
+                st.success("✅ บันทึกไฟล์เรียบร้อย! (บันทึกแค่ในเซิร์ฟเวอร์ชั่วคราว เนื่องจากไม่ได้ต่อ GitHub)")
+                
         st.caption("🟢 กำลังแสดงผลจาก: **ไฟล์ที่เพิ่งอัปโหลด**")
+        
     elif os.path.exists(saved_up_file):
         target_file = saved_up_file
         st.caption("📌 กำลังแสดงผลจาก: **ไฟล์ที่บันทึกไว้ล่าสุด**")
         if st.button("🗑️ ล้างข้อมูลไฟล์ที่บันทึกไว้", use_container_width=True):
             os.remove(saved_up_file)
             st.rerun()
-    elif os.path.exists("14-8.xlsx"):
-        target_file = "14-8.xlsx"
-        st.caption("🕒 กำลังแสดงผลจาก: **ข้อมูลเริ่มต้น (14-8.xlsx)**")
 
 with col_plan_toggle:
     st.markdown('<div class="filter-title">⚙️ โหมดคำนวณ</div>', unsafe_allow_html=True)
     include_plan = st.checkbox("รวมแผนผลิต (Plan)", value=True)
 
 # -------------------------------------------------------------
-# จุดแก้ปัญหาเว็บล่ม: ถ้าระบบหาไฟล์ไม่เจอ ให้โชว์คำเตือนแทนการแสดง Error
+# 5. การแสดงผลและการคำนวณ Dashboard
 # -------------------------------------------------------------
 if target_file is None:
     with col_header:
@@ -263,8 +343,8 @@ if target_file is None:
                 <p style="margin:6px 0 0 0; color:#64748b; font-size: 15px;">ระบบรันสำเร็จ! พร้อมใช้งานแล้ว</p>
             </div>
         """, unsafe_allow_html=True)
-    st.info("👋 ยินดีต้อนรับ! ระบบไม่พบไฟล์ข้อมูลตั้งต้นบนเซิร์ฟเวอร์ **กรุณาอัปโหลดไฟล์ Database ประจำวัน (เช่น 14-8.xlsx)** ที่ช่องมุมขวาบน เพื่อเริ่มต้นการแสดงผลครับ")
-    st.warning("💡 หมายเหตุ: หากอัปโหลดไฟล์แล้วยัง Error กรุณาตรวจสอบให้แน่ใจว่าใน GitHub ของคุณได้ทำการอัปโหลดไฟล์ `Copy of daily check spc Aug26 rev2.2-1 .xlsx` (Master Template) เข้าไปเก็บไว้ใน Repository แล้ว")
+    st.info("👋 ยินดีต้อนรับ! ระบบไม่พบไฟล์ข้อมูลตั้งต้น **กรุณาอัปโหลดไฟล์ Database ประจำวัน** ที่ช่องมุมขวาบน เพื่อเริ่มต้นการแสดงผลครับ")
+    st.warning("💡 หมายเหตุ: หากอัปโหลดไฟล์แล้วยัง Error กรุณาตรวจสอบให้แน่ใจว่าใน GitHub ของคุณมีไฟล์ `Copy of daily check spc Aug26 rev2.2-1 .xlsx` (Master Template) เก็บไว้ใน Repository แล้ว")
 else:
     try:
         with st.spinner("กำลังประมวลผลข้อมูล..."):
@@ -310,7 +390,7 @@ else:
 
         mode_status = "✨ ข้อมูลอัปเดตล่าสุด<br>(Live File)" if uploaded_file is not None else "🕒 ข้อมูลเดิม<br>(Master File)"
 
-        # 5. การ์ด KPI 
+        # 6. การ์ด KPI 
         st.markdown(f"""
             <div class="kpi-row">
                 <div class="kpi-card b-red">
@@ -328,7 +408,7 @@ else:
             </div>
         """, unsafe_allow_html=True)
 
-        # 6. แบ่งหน้าจอ
+        # 7. แบ่งหน้าจอ
         left_col, right_col = st.columns([1.2, 2.8])
 
         with left_col:
